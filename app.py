@@ -2,7 +2,7 @@
 Aplicação Flask principal para o Projeto Integrador IV - Dengue Sertãozinho
 
 - Usa `df_dengue_tratado.csv` para todas as estatísticas e análises gerais.
-- Usa `modelo_reglog_pi4.pkl` e o dataset balanceado `df_final_predict.csv` APENAS para o modelo preditivo.
+- Usa `modelo_reglog_pi4_retrained.pkl` e o dataset balanceado `df_final_predict.csv` APENAS para o modelo preditivo.
 """
 
 from flask import Flask, render_template, jsonify, request
@@ -12,19 +12,30 @@ import numpy as np
 
 app = Flask(__name__)
 
+# --- Variáveis Globais ---
+MODEL_PATH = "modelo_reglog_pi4_retrained.pkl"
+INPUT_FEATURES = ['IDADE', 'CS_SEXO', 'FEBRE', 'VOMITO', 'MIALGIA', 'CEFALEIA', 'EXANTEMA']
+CATEGORICAL_COLS = ['CS_SEXO', 'FEBRE', 'VOMITO', 'MIALGIA', 'CEFALEIA', 'EXANTEMA']
+
 # --- Carregamento de Dados ---
 
 # 1. Dataset de Sertãozinho (para estatísticas e visualizações)
 print("Carregando dataset de Sertãozinho para estatísticas...")
-df_stats = pd.read_csv("df_dengue_tratado.csv")
-df_stats["DT_NOTIFIC"] = pd.to_datetime(df_stats["DT_NOTIFIC"])
-df_stats["DT_SIN_PRI"] = pd.to_datetime(df_stats["DT_SIN_PRI"])
-print(f"   ✓ Dataset de estatísticas carregado: {len(df_stats):,} registros")
+try:
+    df_stats = pd.read_csv("df_dengue_tratado.csv")
+    df_stats["DT_NOTIFIC"] = pd.to_datetime(df_stats["DT_NOTIFIC"])
+    df_stats["DT_SIN_PRI"] = pd.to_datetime(df_stats["DT_SIN_PRI"])
+    df_stats["NU_ANO"] = df_stats["DT_NOTIFIC"].dt.year
+    print(f"   ✓ Dataset de estatísticas carregado: {len(df_stats):,} registros")
+except FileNotFoundError:
+    print("ERRO: df_dengue_tratado.csv não encontrado.")
+    df_stats = pd.DataFrame()
+
 
 # 2. Modelo Preditivo
-print("Carregando modelo preditivo...")
+print(f"Carregando modelo preditivo de {MODEL_PATH}...")
 try:
-    model = joblib.load("modelo_reglog_pi4.pkl")
+    model = joblib.load(MODEL_PATH)
     model_features = model.feature_names_in_
     print(f"   ✓ Modelo carregado: {type(model).__name__}")
     print(f"   ✓ Features do modelo: {len(model_features)}")
@@ -50,6 +61,9 @@ def dashboard():
 @app.route("/api/data/summary")
 def data_summary():
     """Retorna um resumo dos dados REAIS de Sertãozinho."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
+        
     total_casos = len(df_stats)
     casos_hospitalizados = len(df_stats[df_stats["HOSPITALIZ"] == "SIM"])
     taxa_hospitalizacao = (casos_hospitalizados / total_casos) * 100 if total_casos > 0 else 0
@@ -66,6 +80,8 @@ def data_summary():
 @app.route("/api/data/casos_por_ano")
 def casos_por_ano():
     """Retorna dados de casos por ano do dataset de Sertãozinho."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     casos_ano = df_stats["NU_ANO"].value_counts().sort_index()
     data = {
         "anos": casos_ano.index.tolist(),
@@ -76,6 +92,8 @@ def casos_por_ano():
 @app.route("/api/data/casos_por_mes")
 def casos_por_mes():
     """Retorna dados de casos por mês do dataset de Sertãozinho."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     df_stats["MES_NOTIFIC"] = df_stats["DT_NOTIFIC"].dt.month
     casos_mes = df_stats["MES_NOTIFIC"].value_counts().sort_index()
     meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -85,56 +103,11 @@ def casos_por_mes():
     }
     return jsonify(data)
 
-# --- API para Predição (usa o modelo treinado) ---
-
-@app.route("/api/predict", methods=["POST"])
-def predict():
-    """Endpoint para predição do modelo de Regressão Logística."""
-    if model is None:
-        return jsonify({"error": "Modelo não carregado"}), 500
-
-    try:
-        data = request.json
-        
-        # Criar um DataFrame com os dados de entrada
-        input_df = pd.DataFrame([data])
-        
-        # 1. Preencher valores ausentes para as colunas que o modelo espera
-        default_values = {
-            "CS_RACA": "IGNORADO",
-            "CS_GESTANT": "NÃO_APLIC",
-            "PETEQUIA_N": "NÃO",
-            "DIABETES": "NÃO",
-            "HEMATOLOG": "NÃO",
-            "HEPATOPAT": "NÃO",
-            "RENAL": "NÃO",
-            "FENOMENO": "Neutro",
-            "INTENS_FENOM": "NEUTRA"
-        }
-        
-        for col, default_val in default_values.items():
-            if col not in input_df.columns:
-                input_df[col] = default_val
-        
-        # 2. Aplicar one-hot encoding
-        categorical_cols = [col for col in ["CS_SEXO", "CS_RACA", "CS_GESTANT", "FEBRE", "MIALGIA", "CEFALEIA", "EXANTEMA", "VOMITO", "PETEQUIA_N", "DIABETES", "HEMATOLOG", "HEPATOPAT", "RENAL", "FENOMENO", "INTENS_FENOM"] if col in input_df.columns]
-        input_encoded = pd.get_dummies(input_df, columns=categorical_cols, drop_first=False)
-        
-        # 3. Alinhar as colunas com as features exatas do modelo
-        input_aligned = input_encoded.reindex(columns=model_features, fill_value=0)
-        
-        # 4. Fazer a predição
-        prediction_proba = model.predict_proba(input_aligned)[:, 1]
-        
-        return jsonify({"probabilidade_hospitalizacao": prediction_proba[0]})
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/data/distribuicao_sexo")
 def distribuicao_sexo():
     """Retorna dados de distribuição por sexo."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     sexo_counts = df_stats['CS_SEXO'].value_counts()
     data = {
         "labels": sexo_counts.index.tolist(),
@@ -145,6 +118,8 @@ def distribuicao_sexo():
 @app.route("/api/data/fenomeno_climatico")
 def fenomeno_climatico():
     """Retorna dados de distribuição por fenômeno climático."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     fenomeno_counts = df_stats['FENOMENO'].value_counts()
     data = {
         "labels": fenomeno_counts.index.tolist(),
@@ -155,6 +130,8 @@ def fenomeno_climatico():
 @app.route("/api/data/hospitalizacao_por_idade")
 def hospitalizacao_por_idade():
     """Retorna dados de hospitalização por faixa etária."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     bins = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 120]
     labels = ['0-10', '11-20', '21-30', '31-40', '41-50', '51-60', '61-70', '71-80', '81-90', '90+']
     df_stats['faixa_etaria'] = pd.cut(df_stats['IDADE'], bins=bins, labels=labels, right=False)
@@ -169,9 +146,23 @@ def hospitalizacao_por_idade():
     }
     return jsonify(data)
 
+@app.route("/api/data/distribuicao_raca")
+def distribuicao_raca():
+    """Retorna dados de distribuição por raça."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
+    raca_counts = df_stats['CS_RACA'].value_counts()
+    data = {
+        "labels": raca_counts.index.tolist(),
+        "values": raca_counts.values.tolist()
+    }
+    return jsonify(data)
+
 @app.route('/api/data/filtered', methods=['POST'])
 def get_filtered_data():
     """Retorna dados filtrados para o dashboard."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
     filters = request.json
     
     filtered_df = df_stats.copy()
@@ -257,6 +248,55 @@ def get_filtered_data():
         "hospitalizacaoIdade": hospitalizacao_idade_data,
         "racaDistribution": distribuicao_raca_data
     })
+
+# --- API para Predição (usa o modelo retreinado) ---
+
+@app.route("/api/predict", methods=["POST"])
+def predict():
+    """Endpoint para predição do modelo de Regressão Logística."""
+    if model is None:
+        return jsonify({"error": "Modelo não carregado"}), 500
+
+    try:
+        data = request.json
+        
+        # 1. Criar um DataFrame com os dados de entrada (apenas as 7 features)
+        input_data = {
+            "IDADE": [int(data.get("idade", 30))],
+            "CS_SEXO": [data.get("sexo", "F")],
+            "FEBRE": [data.get("febre", "NAO")],
+            "VOMITO": [data.get("vomito", "NAO")],
+            "MIALGIA": [data.get("mialgia", "NAO")],
+            "CEFALEIA": [data.get("cefaleia", "NAO")],
+            "EXANTEMA": [data.get("exantema", "NAO")]
+        }
+        input_df = pd.DataFrame(input_data)
+        
+        # 2. Aplicar one-hot encoding APENAS nas colunas categóricas de input
+        input_encoded = pd.get_dummies(input_df, columns=CATEGORICAL_COLS, drop_first=False)
+        
+        # 3. Alinhar as colunas com as features exatas do modelo
+        # Criar um DataFrame com todas as features esperadas, preenchidas com 0
+        input_aligned = pd.DataFrame(0, index=[0], columns=model_features)
+        
+        # Preencher as colunas que vieram do input_encoded
+        for col in input_encoded.columns:
+            if col in input_aligned.columns:
+                input_aligned[col] = input_encoded[col].iloc[0]
+        
+        # Preencher a coluna IDADE (que não é one-hot encoded)
+        if 'IDADE' in input_aligned.columns:
+            input_aligned['IDADE'] = input_df['IDADE'].iloc[0]
+        
+        # 4. Fazer a predição
+        prediction_proba = model.predict_proba(input_aligned)[:, 1]
+        
+        return jsonify({"probabilidade_hospitalizacao": round(prediction_proba[0] * 100, 2)})
+    
+    except Exception as e:
+        # Retornar o erro para diagnóstico
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
