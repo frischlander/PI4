@@ -77,6 +77,7 @@ def data_summary():
     }
     return jsonify(summary)
 
+<<<<<<< HEAD
 @app.route("/api/data/casos_por_ano")
 def casos_por_ano():
     """Retorna dados de casos por ano do dataset de Sertãozinho."""
@@ -103,6 +104,65 @@ def casos_por_mes():
     }
     return jsonify(data)
 
+=======
+# Outras APIs de estatísticas (casos_por_ano, casos_por_mes, distribuicao_sexo, fenomeno_climatico, hospitalizacao_por_idade, get_filtered_data)
+# ... (manter as APIs de estatísticas inalteradas, pois o problema é no predict) ...
+
+# --- API para Predição (usa o modelo treinado) ---
+
+@app.route("/api/predict", methods=["POST"])
+def predict():
+    """Endpoint para predição do modelo de Regressão Logística."""
+    if model is None:
+        return jsonify({"error": "Modelo não carregado"}), 500
+
+    try:
+        data = request.json
+        
+        # 1. Criar um DataFrame com os dados de entrada (apenas as 7 features)
+        input_data = {
+            "IDADE": [int(data.get("idade", 30))],
+            "CS_SEXO": [data.get("sexo", "F")],
+            "FEBRE": [data.get("febre", "NAO")],
+            "VOMITO": [data.get("vomito", "NAO")],
+            "MIALGIA": [data.get("mialgia", "NAO")],
+            "CEFALEIA": [data.get("cefaleia", "NAO")],
+            "EXANTEMA": [data.get("exantema", "NAO")]
+        }
+        input_df = pd.DataFrame(input_data)
+        
+        # 2. Aplicar one-hot encoding APENAS nas colunas categóricas de input
+        categorical_cols = ["CS_SEXO", "FEBRE", "VOMITO", "MIALGIA", "CEFALEIA", "EXANTEMA"]
+        input_encoded = pd.get_dummies(input_df, columns=categorical_cols, drop_first=False)
+        
+        # 3. Alinhar as colunas com as features exatas do modelo
+        # O problema de 100% é que o modelo espera TODAS as features (47)
+        # e as features não fornecidas (comorbidades, raça, fenômeno) não estavam sendo preenchidas corretamente.
+        # Agora, vamos garantir que todas as 47 features sejam criadas e preenchidas com 0 ou valor padrão.
+        
+        # Criar um DataFrame com todas as 47 features esperadas, preenchidas com 0
+        input_aligned = pd.DataFrame(0, index=[0], columns=model_features)
+        
+        # Preencher as colunas que vieram do input_encoded
+        for col in input_encoded.columns:
+            if col in input_aligned.columns:
+                input_aligned[col] = input_encoded[col].iloc[0]
+        
+        # Preencher a coluna IDADE (que não é one-hot encoded)
+        input_aligned['IDADE'] = input_df['IDADE'].iloc[0]
+        
+        # 4. Fazer a predição
+        prediction_proba = model.predict_proba(input_aligned)[:, 1]
+        
+        return jsonify({"probabilidade_hospitalizacao": prediction_proba[0]})
+    
+    except Exception as e:
+        # Retornar o erro para diagnóstico
+        return jsonify({"error": str(e)}), 500
+
+# (Manter as APIs de estatísticas inalteradas)
+
+>>>>>>> d132cca3cd7fc276a0f94e888ca2ca63db84520e
 @app.route("/api/data/distribuicao_sexo")
 def distribuicao_sexo():
     """Retorna dados de distribuição por sexo."""
@@ -249,6 +309,7 @@ def get_filtered_data():
         "racaDistribution": distribuicao_raca_data
     })
 
+<<<<<<< HEAD
 # --- API para Predição (usa o modelo retreinado) ---
 
 @app.route("/api/predict", methods=["POST"])
@@ -296,6 +357,19 @@ def predict():
     except Exception as e:
         # Retornar o erro para diagnóstico
         return jsonify({"error": str(e)}), 500
+=======
+@app.route("/api/data/distribuicao_raca")
+def distribuicao_raca():
+    """Retorna dados de distribuição por raça."""
+    if df_stats.empty:
+        return jsonify({"error": "Dados de estatísticas não carregados"}), 500
+    raca_counts = df_stats['CS_RACA'].value_counts()
+    data = {
+        "labels": raca_counts.index.tolist(),
+        "values": raca_counts.values.tolist()
+    }
+    return jsonify(data)
+>>>>>>> d132cca3cd7fc276a0f94e888ca2ca63db84520e
 
 
 if __name__ == "__main__":
